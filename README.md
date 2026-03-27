@@ -64,14 +64,10 @@ These issues result in delayed diagnoses, higher expenses, and compromised quali
 
 ---
 
-## 🚀 Installation & Setup
+## Technical Architectural Diagram 
 
-### Prerequisites
+<img width="3883" height="3801" alt="Hack O NiT Project" src="https://github.com/user-attachments/assets/e2730895-bf3b-4771-9327-015af2785084" />
 
-- Node.js (v18+)  
-- MongoDB Atlas  
-- Cloudinary Account  
-- Gemini API Key  
 
 ---
 
@@ -97,6 +93,15 @@ These issues result in delayed diagnoses, higher expenses, and compromised quali
 - Print report
 
 ---
+
+## Working Prototype
+
+<img width="1899" height="913" alt="Screenshot 2026-03-26 222930" src="https://github.com/user-attachments/assets/3464d4d7-3191-4b71-8ee6-294e1f750aab" />
+ 
+<img width="1891" height="912" alt="Screenshot 2026-03-26 233509" src="https://github.com/user-attachments/assets/bef97579-a804-41d3-9fb7-dc8f4e6eb783" />
+
+
+--
 
 ## 🌟 Impact & Benefits
 
