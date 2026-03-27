@@ -148,6 +148,6 @@ These issues result in delayed diagnoses, higher expenses, and compromised quali
 
 ## ❤️ Built for Rural India
 
-### git clone https://github.com/yourusername/swasthyasetu.git
+### git clone https://github.com/Checkmate-333/SwasthyaSetu.git
 
 ### cd swasthyasetu
