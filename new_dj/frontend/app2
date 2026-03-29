@@ -1,0 +1,434 @@
+const API_URL = 'http://localhost:5000/api';
+
+// Core State
+let currentUser = null;
+let currentToken = null;
+let activePatientId = null;
+
+// IndexedDB for Offline Sync Queue
+let db;
+function initDB() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('MedOfflineDB', 1);
+    request.onerror = e => reject('IndexedDB error');
+    request.onsuccess = e => { db = e.target.result; resolve(db); };
+    request.onupgradeneeded = e => {
+      db = e.target.result;
+      if (!db.objectStoreNames.contains('syncQueue')) {
+        db.createObjectStore('syncQueue', { keyPath: 'id', autoIncrement: true });
+      }
+    };
+  });
+}
+
+function saveToOfflineQueue(type, payload, file = null) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('syncQueue', 'readwrite');
+    const store = tx.objectStore('syncQueue');
+    store.add({ type, payload, file, timestamp: Date.now() });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject();
+  });
+}
+
+async function syncQueue() {
+  if (!navigator.onLine || !db) return;
+  const tx = db.transaction('syncQueue', 'readonly');
+  const store = tx.objectStore('syncQueue');
+  const req = store.getAll();
+  
+  req.onsuccess = async () => {
+    const items = req.result;
+    if (items.length > 0) showNotification(`Syncing ${items.length} offline actions...`, 'success');
+    
+    for (const item of items) {
+      try {
+        if (item.type === 'visit') {
+          await fetch(`${API_URL}/visit/add`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${currentToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(item.payload)
+          });
+        } else if (item.type === 'report') {
+          const formData = new FormData();
+          formData.append('patient_id', item.payload.patient_id);
+          formData.append('file', item.file, item.payload.fileName);
+          
+          await fetch(`${API_URL}/report/process`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${currentToken}` },
+            body: formData
+          });
+        }
+        
+        // Remove from db queue upon success
+        const delTx = db.transaction('syncQueue', 'readwrite');
+        delTx.objectStore('syncQueue').delete(item.id);
+      } catch (e) {
+        console.error('Offline sync execution failed', e);
+      }
+    }
+    
+    if (items.length > 0) {
+      showNotification('Offline queue successfully synced!', 'success');
+      if (activePatientId) loadPatientHistory(activePatientId);
+    }
+  };
+}
+
+// Initialize Core Behaviors
+document.addEventListener('DOMContentLoaded', async () => {
+  try { await initDB(); } catch(e) { console.warn("Offline IndexedDB unavailable.", e); }
+  window.addEventListener('online', syncQueue);
+
+  const token = localStorage.getItem('token');
+  const user = localStorage.getItem('user');
+
+  if (token && user) {
+    currentToken = token;
+    currentUser = JSON.parse(user);
+    initializeDashboard();
+  } else {
+    switchView('login-view');
+  }
+
+  document.getElementById('login-form').addEventListener('submit', handleLogin);
+  document.getElementById('register-form').addEventListener('submit', handleRegister);
+  document.getElementById('nav-logout').addEventListener('click', logout);
+  document.getElementById('nav-dashboard').addEventListener('click', initializeDashboard);
+  
+  document.getElementById('reg-role').addEventListener('change', (e) => {
+    document.getElementById('reg-mobile-group').style.display = e.target.value === 'patient' ? 'block' : 'none';
+  });
+});
+
+// UI Abstractions
+function showNotification(msg, type = 'success') {
+  const notif = document.getElementById('notification');
+  notif.textContent = msg;
+  notif.className = `notification show ${type}`;
+  setTimeout(() => notif.className = 'notification', 4000);
+}
+
+function switchView(viewId) {
+  document.querySelectorAll('.view-container').forEach(v => v.classList.remove('active'));
+  document.getElementById(viewId).classList.add('active');
+  
+  const loggedIn = !!currentToken;
+  document.getElementById('nav-group').style.display = loggedIn ? 'flex' : 'none';
+  if (loggedIn) {
+      document.getElementById('nav-user-name').textContent = currentUser.name;
+  }
+}
+
+function getAuthHeaders() {
+  return { 'Authorization': `Bearer ${currentToken}` };
+}
+
+// Authentication Wrappers
+async function handleLogin(e) {
+  e.preventDefault();
+  const email = document.getElementById('login-email').value;
+  const password = document.getElementById('login-password').value;
+  
+  try {
+    const res = await fetch(`${API_URL}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+    
+    const data = await res.json();
+    if (res.ok) { finishAuth(data); } else throw new Error(data.message);
+  } catch(err) { showNotification(err.message, 'error'); }
+}
+
+async function handleRegister(e) {
+  e.preventDefault();
+  const name = document.getElementById('reg-name').value;
+  const email = document.getElementById('reg-email').value;
+  const password = document.getElementById('reg-password').value;
+  const role = document.getElementById('reg-role').value;
+  const mobile = document.getElementById('reg-mobile').value;
+
+  try {
+    const res = await fetch(`${API_URL}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, email, password, role, mobile })
+    });
+    
+    const data = await res.json();
+    if (res.ok) { finishAuth(data); } else throw new Error(data.message);
+  } catch(err) { showNotification(err.message, 'error'); }
+}
+
+function finishAuth(data) {
+  currentToken = data.token;
+  currentUser = data;
+  localStorage.setItem('token', currentToken);
+  localStorage.setItem('user', JSON.stringify(currentUser));
+  
+  showNotification(`Welcome back, ${currentUser.name}!`);
+  initializeDashboard();
+}
+
+function logout() {
+  currentToken = null; 
+  currentUser = null; 
+  activePatientId = null;
+  localStorage.clear();
+  switchView('login-view');
+}
+
+function initializeDashboard() {
+  if (currentUser.role === 'patient') {
+    switchView('patient-dashboard');
+    document.getElementById('pat-name').textContent = currentUser.name;
+    loadPatientHistory(currentUser._id);
+  } else {
+    switchView('doctor-dashboard');
+    document.getElementById('doc-name').textContent = currentUser.name;
+    document.getElementById('doc-idle').style.display = 'block';
+    document.getElementById('doc-active-patient').style.display = 'none';
+  }
+}
+
+// Comprehensive Data Stitching Request Engine (Offline First)
+async function loadPatientHistory(pid = currentUser._id) {
+  const isDoc = currentUser.role === 'doctor';
+  const sumEl = isDoc ? 'doc-ai-summary' : 'pat-ai-summary';
+  const histEl = isDoc ? 'doc-history-list' : 'pat-history-list';
+
+  // Overwrite UI instantly from memory Cache if available offline
+  const cachedHistory = localStorage.getItem(`history_${pid}`);
+  if (cachedHistory) {
+     const aiData = JSON.parse(cachedHistory);
+     if (aiData.ai_summary) renderAISummary(aiData.ai_summary, sumEl);
+     renderTimeline(aiData.visits || [], aiData.reports || [], histEl);
+  }
+
+  // Abort Network logic securely if offline
+  if (!navigator.onLine) {
+     if (!cachedHistory) document.getElementById(sumEl).textContent = "You are offline. Cannot load initial data.";
+     return showNotification('You are Offline. Serving Data from Cache.', 'success');
+  }
+
+  try {
+    document.getElementById(sumEl).textContent = "Connecting to Gemini AI Engine... Scanning histories...";
+    document.getElementById(sumEl).style.display = 'block';
+
+    const aiRes = await fetch(`${API_URL}/ai-summary/${pid}`, { headers: getAuthHeaders() });
+    const aiData = await aiRes.json();
+
+    if (aiRes.ok) {
+        // Explicitly dump data back to localStorage overlay 
+        localStorage.setItem(`history_${pid}`, JSON.stringify(aiData));
+        
+        if (aiData.ai_summary) {
+             renderAISummary(aiData.ai_summary, sumEl);
+        } else {
+             document.getElementById(sumEl).textContent = "Gemini Engine Unavailable - AI Report skipped.";
+        }
+        
+        renderTimeline(aiData.visits || [], aiData.reports || [], histEl);
+    } else { throw new Error(aiData.message); }
+
+    if (!isDoc) {
+        const pRes = await fetch(`${API_URL}/patient/${pid}`, { headers: getAuthHeaders() });
+        const pData = await pRes.json();
+        if (pRes.ok) { document.getElementById('pat-health-id').textContent = pData.health_id || 'Generating...'; }
+    }
+
+  } catch(err) { 
+    showNotification(err.message, 'error'); 
+  }
+}
+
+// UI Parsers
+function renderAISummary(sum, elId) {
+  let html = `<h4 class="ai-card-title">Gemini Synthesis Panel</h4>`;
+  html += `<strong>🩺 Clinical Diagnosis Overview:</strong><br/>${sum.summary || sum.ai_summary?.summary || "No overview mapped"}<br><br>`;
+  
+  const risks = sum.risks || sum.ai_summary?.risks;
+  if (risks && risks.length) {
+    html += `<strong>⚠️ Identified Risk Factors (Alerts):</strong><ul>${risks.map(r => `<li>${r}</li>`).join('')}</ul>`;
+  }
+  
+  const patterns = sum.patterns || sum.ai_summary?.patterns;
+  if (patterns && patterns.length) {
+    html += `<strong>🔬 Recognized Patterns:</strong><ul>${patterns.map(p => `<li>${p}</li>`).join('')}</ul>`;
+  }
+  
+  document.getElementById(elId).innerHTML = html;
+}
+
+function renderTimeline(visits, reports, elId) {
+  const container = document.getElementById(elId);
+  container.innerHTML = '';
+  
+  if (!visits || !visits.length) {
+      return container.innerHTML = '<p style="color:var(--text-muted); padding: 1rem;">No historical timeline footprints available.</p>';
+  }
+  
+  const timelineDiv = document.createElement('div');
+  timelineDiv.className = 'timeline';
+
+  visits.forEach(v => {
+    const visitReports = reports.filter(r => r.visit_id === v._id);
+    const item = document.createElement('div');
+    item.className = 'timeline-item';
+    
+    const dateStr = new Date(v.date).toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'long', day: 'numeric' });
+    const medicinesHTML = v.prescriptions && v.prescriptions.length > 0
+      ? `<div class="timeline-meds"><strong>💊 Prescribed:</strong><br/>` + 
+         v.prescriptions.flatMap(p => p.medicines).map(m => `&bull; ${m.name} (${m.dosage} - ${m.frequency})`).join('<br/>') + 
+         `</div>`
+      : '';
+      
+    const unstructuredReportsAttachedHTML = visitReports.map(r => {
+        let label = `View Physical Scan`;
+        if(r.structured_data && r.structured_data.diagnosis) label += ` | AI: ${r.structured_data.diagnosis.substring(0,30)}...`;
+        return `<a href="http://localhost:5000${r.file_url}" target="_blank">📄 ${label}</a>`;
+    }).join('');
+
+    item.innerHTML = `
+      <div class="timeline-content">
+         <div class="timeline-date">${dateStr}</div>
+         <div class="timeline-body">
+            <p><strong><span style="color:#94A3B8">Symptoms:</span></strong> ${v.symptoms}</p>
+            <p><strong><span style="color:#94A3B8">Diagnosis:</span></strong> ${v.diagnosis}</p>
+            ${medicinesHTML}
+            ${visitReports.length > 0 ? `<div class="timeline-reports">${unstructuredReportsAttachedHTML}</div>` : ''}
+         </div>
+      </div>
+    `;
+    timelineDiv.appendChild(item);
+  });
+  
+  container.appendChild(timelineDiv);
+}
+
+// Doctor Portal Functions
+async function searchPatient() {
+  const mobile = document.getElementById('search-mobile').value;
+  if (!mobile) return showNotification('Please enter a mobile number', 'error');
+  
+  if (!navigator.onLine) {
+    return showNotification('Must be online to search patients natively', 'error');
+  }
+
+  try {
+    const res = await fetch(`${API_URL}/patient/search?mobile=${mobile}`, { headers: getAuthHeaders() });
+    const data = await res.json();
+    
+    if (res.ok) {
+      document.getElementById('found-pat-name').textContent = data.name;
+      document.getElementById('found-pat-id').textContent = data._id;
+      document.getElementById('search-result').style.display = 'block';
+    } else throw new Error(data.message);
+  } catch(e) { showNotification(e.message, 'error'); }
+}
+
+function loadDoctorPatientView() {
+  activePatientId = document.getElementById('found-pat-id').textContent;
+  
+  document.getElementById('doc-active-pat-name').textContent = document.getElementById('found-pat-name').textContent;
+  document.getElementById('doc-idle').style.display = 'none';
+  document.getElementById('doc-active-patient').style.display = 'block';
+  
+  document.getElementById('doc-history-list').innerHTML = '';
+  document.getElementById('doc-ai-summary').style.display = 'none';
+}
+
+async function generateAISummaryDoc() {
+   loadPatientHistory(activePatientId);
+}
+
+async function addVisit() {
+  const symptoms = document.getElementById('visit-symp').value;
+  const diagnosis = document.getElementById('visit-diag').value;
+  
+  if (!symptoms || !diagnosis) return showNotification('Fill symptoms and diagnosis correctly', 'error');
+
+  const payload = { patient_id: activePatientId, symptoms, diagnosis };
+
+  if (!navigator.onLine) {
+    await saveToOfflineQueue('visit', payload);
+    showNotification('Offline mode. Clinical visit footprint safely queued locally.', 'success');
+    document.getElementById('visit-symp').value = '';
+    document.getElementById('visit-diag').value = '';
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_URL}/visit/add`, {
+      method: 'POST',
+      headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    
+    if (res.ok) {
+      showNotification('Clinical visit footprint added to DB successfully!');
+      document.getElementById('visit-symp').value = '';
+      document.getElementById('visit-diag').value = '';
+      loadPatientHistory(activePatientId);
+    } else throw new Error((await res.json()).message);
+  } catch(e) { showNotification(e.message, 'error'); }
+}
+
+async function uploadReport() {
+  const fileInput = document.getElementById('report-file');
+  if(!fileInput.files[0]) return showNotification('Please securely select an image/PDF file to process', 'error');
+  
+  const file = fileInput.files[0];
+  
+  if (!navigator.onLine) {
+    await saveToOfflineQueue('report', { patient_id: activePatientId, fileName: file.name }, file);
+    showNotification('Offline mode. Native report safely queued for delayed upload pipeline.', 'success');
+    fileInput.value = '';
+    return;
+  }
+  
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('patient_id', activePatientId);
+  
+  showNotification('Uploading... Pumping payload into Python OCR/NLP microservices pipelining...', 'success');
+  
+  try {
+    const res = await fetch(`${API_URL}/report/process`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${currentToken}` },
+      body: formData
+    });
+    
+    if (res.ok) {
+      showNotification('OCR and Natural Language Processing successful!');
+      fileInput.value = ''; 
+      loadPatientHistory(activePatientId);
+    } else {
+        const failData = await res.json();
+        throw new Error(failData.error && failData.error.error ? failData.error.error : failData.message);
+    }
+  } catch(e) { showNotification(e.message, 'error'); }
+}
+async function getSummary() {
+    const res = await fetch("http://localhost:5000/api/ai-summary/1");
+    const data = await res.json();
+
+    document.getElementById("summaryBox").innerText = data.summary;
+}
+async function uploadReport(file) {
+    const formData = new FormData();
+    formData.append("image", file);
+
+    const res = await fetch("http://localhost:5000/process-report", {
+        method: "POST",
+        body: formData
+    });
+
+    const data = await res.json();
+
+    console.log(data);
+}
