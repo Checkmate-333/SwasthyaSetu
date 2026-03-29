@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>OCR Test</title>
+</head>
+<body>
+
+<h2>Upload Image for OCR</h2>
+
+<input type="file" id="imageInput">
+<button onclick="uploadImage()">Upload</button>
+
+<h3>Result:</h3>
+<pre id="result"></pre>
+
+<script>
+async function uploadImage() {
+    const fileInput = document.getElementById("imageInput");
+    const file = fileInput.files[0];
+
+    if (!file) {
+        alert("Please select a file");
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append("image", file);
+
+    const response = await fetch("http://127.0.0.1:5001/ocr", {
+        method: "POST",
+        body: formData
+    });
+
+    const data = await response.json();
+
+    document.getElementById("result").innerText = data.text;
+}
+</script>
+
+</body>
+</html>
