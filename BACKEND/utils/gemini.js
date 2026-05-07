@@ -1,7 +1,7 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const fs = require('fs');
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || 'AIzaSyBAaMGlkh4GIYR3VDpel5fvHnfOO5nMpGg');
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || 'api key');
 
 function fileToGenerativePart(path, mimeType) {
   return {
@@ -25,7 +25,7 @@ async function urlToGenerativePart(url, mimeType) {
 }
 
 const extractClinicalData = async (imagePath, mimeType) => {
-  if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'AIzaSyBAaMGlkh4GIYR3VDpel5fvHnfOO5nMpGg') {
+  if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'api key') {
     console.log('GEMINI_API_KEY is mocked. Returning mock AI summary.');
     return {
       diagnoses: ['Type 2 Diabetes', 'Hypertension'],
