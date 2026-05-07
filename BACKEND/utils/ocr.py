@@ -3,8 +3,8 @@ import requests
 
 app = FastAPI()
 
-API_KEY = "K84159433188957"
-OCR_URL = "https://api.ocr.space/parse/image"
+API_KEY = "api key"
+OCR_URL = "ocr url"
 
 @app.post("/upload")
 async def upload_image(file: UploadFile = File(...)):
